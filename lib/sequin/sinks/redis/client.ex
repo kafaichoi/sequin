@@ -87,8 +87,21 @@ defmodule Sequin.Sinks.Redis.Client do
 
   defp qp(connection, commands) do
     case :eredis.qp(connection, commands, :timer.seconds(15)) do
-      {:error, error} -> {:error, handle_error(error)}
-      _res -> :ok
+      results when is_list(results) ->
+        # First check if any result is an error
+        if Enum.any?(results, &match?({:error, _}, &1)) do
+          # We assume that failed commands are rare, so we only perform zip if there is at least one error
+          failed_commands =
+            Enum.zip(commands, results)
+            |> Enum.filter(fn
+              {{:error, _}, _} -> true
+              _ -> false
+            end)
+
+          Error.service(service: :redis_stream_sink, code: :command_failed, message: "Failed to execute commands", details: %{failed_commands: failed_commands})
+        else
+          :ok
+        end
     end
   catch
     :exit, {error, _} ->
